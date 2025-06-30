@@ -1,13 +1,17 @@
 function Footer() {
-  return (
-    <footer className="footer">
-      <div className="container">
-        <p className="text-center">
-          &copy; {new Date().getFullYear()} Code World. All rights reserved.
-        </p>
-      </div>
-    </footer>
-  );
+    return (
+        <footer className="static bottom-1 left-0 flex w-full justify-center sm:fixed">
+            <span>
+                Build with ❤️ by{" "}
+                <a
+                    href="https://github.com/PranjalTheCoder"
+                    className="text-primary underline underline-offset-1"
+                >
+                    PranjalTheCoder
+                </a>
+            </span>
+        </footer>
+    )
 }
 
-export default Footer;
+export default Footer
