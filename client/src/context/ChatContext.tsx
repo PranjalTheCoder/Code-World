@@ -11,6 +11,7 @@ import { useSocket } from "./SocketContext"
 
 const ChatContext = createContext<ChatContextType | null>(null)
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useChatRoom = (): ChatContextType => {
     const context = useContext(ChatContext)
     if (!context) {

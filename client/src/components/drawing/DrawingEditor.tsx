@@ -63,7 +63,7 @@ function ReachEditor() {
         if (drawingData && Object.keys(drawingData).length > 0) {
             editor.store.loadSnapshot(drawingData)
         }
-    }, [])
+    }, [drawingData, editor.store])
 
     useEffect(() => {
         const cleanupFunction = editor.store.listen(handleChangeEvent, {

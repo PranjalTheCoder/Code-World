@@ -30,6 +30,7 @@ import { useSocket } from "./SocketContext"
 
 const FileContext = createContext<FileContextType | null>(null)
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useFileSystem = (): FileContextType => {
     const context = useContext(FileContext)
     if (!context) {

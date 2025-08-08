@@ -13,6 +13,7 @@ import { useFileSystem } from "./FileContext"
 
 const RunCodeContext = createContext<RunContextType | null>(null)
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useRunCode = () => {
     const context = useContext(RunCodeContext)
     if (context === null) {
