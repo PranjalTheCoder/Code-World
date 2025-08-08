@@ -13,7 +13,18 @@ const app = express()
 
 app.use(express.json())
 
-app.use(cors())
+const allowedOrigins = [
+  "https://code-world-beta.vercel.app",
+];
+
+// Use cors middleware
+app.use(
+  cors({
+    origin: allowedOrigins,
+    credentials: true,
+  })
+);
+
 
 app.use(express.static(path.join(__dirname, "public"))) // Serve static files
 
