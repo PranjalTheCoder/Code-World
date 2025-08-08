@@ -40,6 +40,7 @@ const RunCodeContextProvider = ({ children }: { children: ReactNode }) => {
             try {
                 const languages = await axiosInstance.get("/runtimes")
                 setSupportedLanguages(languages.data)
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             } catch (error: any) {
                 toast.error("Failed to fetch supported languages")
                 if (error?.response?.data) console.error(error?.response?.data)
@@ -91,6 +92,7 @@ const RunCodeContextProvider = ({ children }: { children: ReactNode }) => {
             }
             setIsRunning(false)
             toast.dismiss()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (error: any) {
             console.error(error.response.data)
             console.error(error.response.data.error)

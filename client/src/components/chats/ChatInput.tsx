@@ -13,7 +13,7 @@ function ChatInput() {
     const { socket } = useSocket()
     const { setMessages } = useChatRoom()
     const inputRef = useRef<HTMLInputElement | null>(null)
-
+    // chat is created
     const handleSendMessage = (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault()
 
@@ -55,3 +55,17 @@ function ChatInput() {
 }
 
 export default ChatInput
+
+
+/*
+1. User types a message in input field
+2. When user presses Enter or clicks Send:
+   a. Prevent default page refresh
+   b. Get message text
+   c. If message is not empty:
+      i. Create message object with ID, username, message text, timestamp
+      ii. Emit the message via socket to server
+      iii. Update local chat message list to show the new message
+      iv. Clear the input box
+
+*/

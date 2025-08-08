@@ -68,3 +68,5 @@ function ChatList() {
 }
 
 export default ChatList
+//It shows the list of chat messages and automatically scrolls to the bottom when new messages arrive.
+// It also remembers your scroll position if you scroll up manually.

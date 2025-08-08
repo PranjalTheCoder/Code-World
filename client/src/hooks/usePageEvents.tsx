@@ -6,6 +6,7 @@ function usePageEvents() {
 
     useEffect(() => {
         // Prevent user from leaving the page
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const beforeUnloadHandler = (e: any) => {
             const msg = "Changes you made may not be saved"
             return (e.returnValue = msg)
@@ -19,6 +20,7 @@ function usePageEvents() {
     }, [])
 
     useEffect(() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const handleWheel = (e: any) => {
             if (e.ctrlKey) {
                 // Prevent default browser zoom behavior
