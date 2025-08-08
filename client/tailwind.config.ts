@@ -2,7 +2,8 @@
 export default {
     content: [
   "./src/**/*.{js,ts,jsx,tsx}",   // ✅ covers all React component files
-  "./public/index.html"           // ✅ required for some HTML-based styles
+  "./public/index.html",
+  "./index.html"           // ✅ required for some HTML-based styles
 ],
     theme: {
         extend: {
