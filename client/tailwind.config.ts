@@ -1,6 +1,9 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-    content: ["./src/**/*.{jsx,tsx}", "./*.html"],
+    content: [
+  "./src/**/*.{js,ts,jsx,tsx}",   // ✅ covers all React component files
+  "./public/index.html"           // ✅ required for some HTML-based styles
+],
     theme: {
         extend: {
             colors: {
