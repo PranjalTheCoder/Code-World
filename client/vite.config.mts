@@ -30,9 +30,9 @@ export default defineConfig({
         ],
     },
     preview: {
-        port: 5173
+        port: 5173,
     },
-    server:{
+    server: {
         open: true,
-    }
+    },
 })
