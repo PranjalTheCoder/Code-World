@@ -1,6 +1,6 @@
-# Code Sync 🧑‍💻💬
+# Code World 🧑‍💻💬
 
-Code Sync is a real-time collaborative code editor that allows multiple users to edit code together, chat, and collaborate seamlessly. It supports live code execution, syntax highlighting, file/folder management, drawing, and AI code suggestions — all in one place.
+Code World is a real-time collaborative code editor that allows multiple users to edit code together, chat, and collaborate seamlessly. It supports live code execution, syntax highlighting, file/folder management, drawing, and AI code suggestions — all in one place.
 
 <p align="left">
   <img src="https://img.shields.io/github/contributors/PranjalTheCoder/Code-World?style=for-the-badge&color=4c1" alt="Contributors">
@@ -43,4 +43,5 @@ https://code-world-beta.vercel.app/
 - Piston API (for code execution)
 
 ---
+
 
