@@ -6,6 +6,9 @@ import { SocketEvent, SocketId } from "./types/socket";
 import { USER_CONNECTION_STATUS, User } from "./types/user";
 import { Server } from "socket.io";
 import path from "path";
+import { connectMongo } from "./db/mongo";
+import { RoomState } from "./models/RoomState";
+import { UserSession } from "./models/UserSession";
 
 dotenv.config();
 
@@ -57,7 +60,7 @@ function getUserBySocketId(socketId: SocketId): User | null {
 
 io.on("connection", (socket) => {
   // Handle user actions
-  socket.on(SocketEvent.JOIN_REQUEST, ({ roomId, username }) => {
+  socket.on(SocketEvent.JOIN_REQUEST, async ({ roomId, username }) => {
     // Check is username exist in the room
     const isUsernameExist = getUsersInRoom(roomId).filter(
       (u) => u.username === username
@@ -81,15 +84,61 @@ io.on("connection", (socket) => {
     socket.broadcast.to(roomId).emit(SocketEvent.USER_JOINED, { user });
     const users = getUsersInRoom(roomId);
     io.to(socket.id).emit(SocketEvent.JOIN_ACCEPTED, { user, users });
+
+    // Track user session in MongoDB (non-blocking)
+    try {
+      await UserSession.findOneAndUpdate(
+        { socketId: socket.id },
+        {
+          username,
+          roomId,
+          socketId: socket.id,
+          status: USER_CONNECTION_STATUS.ONLINE,
+          cursorPosition: 0,
+          typing: false,
+          currentFile: null,
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+    } catch (err) {
+      console.error("Failed to upsert UserSession:", err);
+    }
+
+    // If a saved room state exists, send it to the joining user
+    try {
+      const existing = await RoomState.findOne({ roomId });
+      if (existing) {
+        io.to(socket.id).emit(SocketEvent.SYNC_FILE_STRUCTURE, {
+          fileStructure: existing.fileStructure,
+          openFiles: existing.openFiles,
+          activeFile: existing.activeFile,
+        });
+        io.to(socket.id).emit(SocketEvent.SYNC_DRAWING, {
+          drawingData: existing.drawingData,
+        });
+      }
+    } catch (err) {
+      console.error("Failed to fetch RoomState:", err);
+    }
   });
 
-  socket.on("disconnecting", () => {
+  socket.on("disconnecting", async () => {
     const user = getUserBySocketId(socket.id);
     if (!user) return;
     const roomId = user.roomId;
     socket.broadcast.to(roomId).emit(SocketEvent.USER_DISCONNECTED, { user });
     userSocketMap = userSocketMap.filter((u) => u.socketId !== socket.id);
     socket.leave(roomId);
+
+    // Mark session offline in Mongo
+    try {
+      await UserSession.findOneAndUpdate(
+        { socketId: socket.id },
+        { status: USER_CONNECTION_STATUS.OFFLINE }
+      );
+    } catch (err) {
+      console.error("Failed to mark UserSession offline:", err);
+    }
   });
 
   // Handle file actions
@@ -168,6 +217,24 @@ io.on("connection", (socket) => {
     if (!roomId) return;
     socket.broadcast.to(roomId).emit(SocketEvent.FILE_DELETED, { fileId });
   });
+
+  // Persist room state to MongoDB
+  socket.on(
+    SocketEvent.PERSIST_FILE_STRUCTURE,
+    async ({ fileStructure, openFiles, activeFile, drawingData }) => {
+      const roomId = getRoomId(socket.id);
+      if (!roomId) return;
+      try {
+        await RoomState.findOneAndUpdate(
+          { roomId },
+          { roomId, fileStructure, openFiles, activeFile, drawingData },
+          { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+      } catch (err) {
+        console.error("Failed to persist RoomState:", err);
+      }
+    }
+  );
 
   // Handle user status
   socket.on(SocketEvent.USER_OFFLINE, ({ socketId }) => {
@@ -252,6 +319,9 @@ io.on("connection", (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
+
+// Establish DB connection at startup
+connectMongo();
 
 app.get("/", (req: Request, res: Response) => {
   // Send the index.html file
