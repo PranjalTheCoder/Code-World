@@ -6,6 +6,7 @@ import { SocketEvent, SocketId } from "./types/socket";
 import { USER_CONNECTION_STATUS, User } from "./types/user";
 import { Server } from "socket.io";
 import path from "path";
+import { prisma } from "./db/client";
 
 dotenv.config();
 
@@ -57,7 +58,7 @@ function getUserBySocketId(socketId: SocketId): User | null {
 
 io.on("connection", (socket) => {
   // Handle user actions
-  socket.on(SocketEvent.JOIN_REQUEST, ({ roomId, username }) => {
+  socket.on(SocketEvent.JOIN_REQUEST, async ({ roomId, username }) => {
     // Check is username exist in the room
     const isUsernameExist = getUsersInRoom(roomId).filter(
       (u) => u.username === username
@@ -77,6 +78,21 @@ io.on("connection", (socket) => {
       currentFile: null,
     };
     userSocketMap.push(user);
+    // Ensure Room and User exist in DB (best-effort)
+    try {
+      const room = await prisma.room.upsert({
+        where: { code: roomId },
+        update: {},
+        create: { code: roomId },
+      });
+      await prisma.user.upsert({
+        where: { username_roomId: { username, roomId: room.id } },
+        update: {},
+        create: { username, roomId: room.id },
+      });
+    } catch (err) {
+      console.error("Failed to upsert room/user", err);
+    }
     socket.join(roomId);
     socket.broadcast.to(roomId).emit(SocketEvent.USER_JOINED, { user });
     const users = getUsersInRoom(roomId);
@@ -198,7 +214,27 @@ io.on("connection", (socket) => {
   socket.on(SocketEvent.SEND_MESSAGE, ({ message }) => {
     const roomId = getRoomId(socket.id);
     if (!roomId) return;
+    // Broadcast to room
     socket.broadcast.to(roomId).emit(SocketEvent.RECEIVE_MESSAGE, { message });
+    // Persist to database (best-effort)
+    try {
+      void prisma.message.create({
+        data: {
+          room: {
+            connectOrCreate: {
+              where: { code: roomId },
+              create: { code: roomId },
+            },
+          },
+          username: message.username,
+          body: message.message,
+          // if client timestamp exists, use it; otherwise default now()
+          timestamp: new Date(),
+        },
+      });
+    } catch (err) {
+      console.error("Failed to persist message", err);
+    }
   });
 
   // Handle cursor position
@@ -254,10 +290,44 @@ io.on("connection", (socket) => {
 const PORT = process.env.PORT || 3000;
 
 app.get("/", (req: Request, res: Response) => {
-  // Send the index.html file
   res.sendFile(path.join(__dirname, "..", "public", "index.html"));
 });
 
-server.listen(PORT, () => {
+// Get recent messages for a room
+app.get("/rooms/:code/messages", async (req: Request, res: Response) => {
+  try {
+    const { code } = req.params;
+    const room = await prisma.room.findUnique({ where: { code } });
+    if (!room) return res.json({ messages: [] });
+
+    const messages = await prisma.message.findMany({
+      where: { roomId: room.id },
+      orderBy: { timestamp: "asc" },
+      take: 200,
+      select: { id: true, username: true, body: true, timestamp: true },
+    });
+
+    res.json({
+      messages: messages.map((m) => ({
+        id: m.id,
+        message: m.body,
+        username: m.username,
+        timestamp: m.timestamp.toISOString(),
+      })),
+    });
+  } catch (err) {
+    console.error("Failed to fetch messages", err);
+    res.status(500).json({ error: "Failed to fetch messages" });
+  }
+});
+
+server.listen(PORT, async () => {
+  try {
+    // Warm up Prisma connection so first request isn't delayed
+    await prisma.$connect();
+    console.log("Database connected");
+  } catch (err) {
+    console.error("Database connection failed", err);
+  }
   console.log(`Listening on port ${PORT}`);
 });
