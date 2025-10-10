@@ -6,15 +6,22 @@ import { SocketEvent, SocketId } from "./types/socket";
 import { USER_CONNECTION_STATUS, User } from "./types/user";
 import { Server } from "socket.io";
 import path from "path";
-import { prisma } from "./db/client";
+import { connectToDatabase } from "./config/db";
+import { createSessionMiddleware } from "./config/session";
+import { Room } from "./models/room.model";
+import { Message } from "./models/message.model";
+import { FileModel } from "./models/file.model";
+import { Drawing } from "./models/drawing.model";
+import { Snapshot } from "./models/snapshot.model";
 
 dotenv.config();
 
 const app = express();
 
 app.use(express.json());
-
 app.use(cors());
+// Apply sessions early, before routes and sockets
+app.use(createSessionMiddleware());
 
 app.use(express.static(path.join(__dirname, "public"))); // Serve static files
 
@@ -78,25 +85,33 @@ io.on("connection", (socket) => {
       currentFile: null,
     };
     userSocketMap.push(user);
-    // Ensure Room and User exist in DB (best-effort)
+    // Ensure Room exists (best-effort)
     try {
-      const room = await prisma.room.upsert({
-        where: { code: roomId },
-        update: {},
-        create: { code: roomId },
-      });
-      await prisma.user.upsert({
-        where: { username_roomId: { username, roomId: room.id } },
-        update: {},
-        create: { username, roomId: room.id },
-      });
+      await Room.updateOne(
+        { roomId },
+        { $setOnInsert: { roomId, title: roomId } },
+        { upsert: true }
+      );
     } catch (err) {
-      console.error("Failed to upsert room/user", err);
+      console.error("Failed to upsert room", err);
     }
     socket.join(roomId);
     socket.broadcast.to(roomId).emit(SocketEvent.USER_JOINED, { user });
     const users = getUsersInRoom(roomId);
     io.to(socket.id).emit(SocketEvent.JOIN_ACCEPTED, { user, users });
+    // If we have persisted room state, send it to the joining client
+    try {
+      const persisted = await Room.findOne({ roomId }).lean();
+      if (persisted && persisted.fileTree) {
+        io.to(socket.id).emit(SocketEvent.SYNC_FILE_STRUCTURE, {
+          fileStructure: persisted.fileTree,
+          openFiles: [],
+          activeFile: null,
+        });
+      }
+    } catch (err) {
+      console.error("Failed to send persisted room state", err);
+    }
   });
 
   socket.on("disconnecting", () => {
@@ -111,7 +126,15 @@ io.on("connection", (socket) => {
   // Handle file actions
   socket.on(
     SocketEvent.SYNC_FILE_STRUCTURE,
-    ({ fileStructure, openFiles, activeFile, socketId }) => {
+    async ({ fileStructure, openFiles, activeFile, socketId }) => {
+      const roomId = getRoomId(socket.id);
+      if (roomId) {
+        try {
+          await Room.updateOne({ roomId }, { $set: { fileTree: fileStructure } });
+        } catch (err) {
+          console.error("Failed to persist file tree", err);
+        }
+      }
       io.to(socketId).emit(SocketEvent.SYNC_FILE_STRUCTURE, {
         fileStructure,
         openFiles,
@@ -127,6 +150,8 @@ io.on("connection", (socket) => {
       parentDirId,
       newDirectory,
     });
+    // Also update fileTree minimalistically
+    // We rely on full SYNC_FILE_STRUCTURE for accurate persistence
   });
 
   socket.on(SocketEvent.DIRECTORY_UPDATED, ({ dirId, children }) => {
@@ -153,36 +178,101 @@ io.on("connection", (socket) => {
     socket.broadcast.to(roomId).emit(SocketEvent.DIRECTORY_DELETED, { dirId });
   });
 
-  socket.on(SocketEvent.FILE_CREATED, ({ parentDirId, newFile }) => {
+  socket.on(SocketEvent.FILE_CREATED, async ({ parentDirId, newFile }) => {
     const roomId = getRoomId(socket.id);
     if (!roomId) return;
     socket.broadcast
       .to(roomId)
       .emit(SocketEvent.FILE_CREATED, { parentDirId, newFile });
+    try {
+      const room = await Room.findOne({ roomId });
+      if (room) {
+        await FileModel.updateOne(
+          { roomId: room._id, fileId: newFile.id },
+          {
+            $setOnInsert: {
+              filename: newFile.name,
+              content: newFile.content ?? "",
+              language: undefined,
+              version: 1,
+            },
+          },
+          { upsert: true }
+        );
+      }
+    } catch (err) {
+      console.error("Failed to persist new file", err);
+    }
   });
 
-  socket.on(SocketEvent.FILE_UPDATED, ({ fileId, newContent }) => {
+  socket.on(SocketEvent.FILE_UPDATED, async ({ fileId, newContent }) => {
     const roomId = getRoomId(socket.id);
     if (!roomId) return;
     socket.broadcast.to(roomId).emit(SocketEvent.FILE_UPDATED, {
       fileId,
       newContent,
     });
+    try {
+      const room = await Room.findOne({ roomId });
+      if (room) {
+        const result = await FileModel.findOneAndUpdate(
+          { roomId: room._id, fileId },
+          {
+            $set: {
+              content: newContent,
+              lastEditedAt: new Date(),
+            },
+            $inc: { version: 1 },
+          },
+          { upsert: true, new: true }
+        );
+        // Periodically snapshot every 20 versions
+        const version = result?.version ?? 0;
+        if (version % 20 === 0 && version > 0) {
+          await Snapshot.updateOne(
+            { fileId: result!._id, version },
+            { $setOnInsert: { content: newContent } },
+            { upsert: true }
+          );
+        }
+      }
+    } catch (err) {
+      console.error("Failed to persist file", err);
+    }
   });
 
-  socket.on(SocketEvent.FILE_RENAMED, ({ fileId, newName }) => {
+  socket.on(SocketEvent.FILE_RENAMED, async ({ fileId, newName }) => {
     const roomId = getRoomId(socket.id);
     if (!roomId) return;
     socket.broadcast.to(roomId).emit(SocketEvent.FILE_RENAMED, {
       fileId,
       newName,
     });
+    try {
+      const room = await Room.findOne({ roomId });
+      if (room) {
+        await FileModel.updateOne(
+          { roomId: room._id, fileId },
+          { $set: { filename: newName } }
+        );
+      }
+    } catch (err) {
+      console.error("Failed to rename file in DB", err);
+    }
   });
 
-  socket.on(SocketEvent.FILE_DELETED, ({ fileId }) => {
+  socket.on(SocketEvent.FILE_DELETED, async ({ fileId }) => {
     const roomId = getRoomId(socket.id);
     if (!roomId) return;
     socket.broadcast.to(roomId).emit(SocketEvent.FILE_DELETED, { fileId });
+    try {
+      const room = await Room.findOne({ roomId });
+      if (room) {
+        await FileModel.deleteOne({ roomId: room._id, fileId });
+      }
+    } catch (err) {
+      console.error("Failed to delete file in DB", err);
+    }
   });
 
   // Handle user status
@@ -211,27 +301,21 @@ io.on("connection", (socket) => {
   });
 
   // Handle chat actions
-  socket.on(SocketEvent.SEND_MESSAGE, ({ message }) => {
+  socket.on(SocketEvent.SEND_MESSAGE, async ({ message }) => {
     const roomId = getRoomId(socket.id);
     if (!roomId) return;
     // Broadcast to room
     socket.broadcast.to(roomId).emit(SocketEvent.RECEIVE_MESSAGE, { message });
     // Persist to database (best-effort)
     try {
-      void prisma.message.create({
-        data: {
-          room: {
-            connectOrCreate: {
-              where: { code: roomId },
-              create: { code: roomId },
-            },
-          },
-          username: message.username,
-          body: message.message,
-          // if client timestamp exists, use it; otherwise default now()
-          timestamp: new Date(),
-        },
-      });
+      const room = await Room.findOne({ roomId });
+      if (room) {
+        await Message.create({
+          roomId: room._id,
+          text: message.message,
+          createdAt: new Date(),
+        });
+      }
     } catch (err) {
       console.error("Failed to persist message", err);
     }
@@ -284,6 +368,26 @@ io.on("connection", (socket) => {
     socket.broadcast.to(roomId).emit(SocketEvent.DRAWING_UPDATE, {
       snapshot,
     });
+    // Persist latest drawing state
+    void (async () => {
+      try {
+        const room = await Room.findOne({ roomId });
+        if (!room) return;
+        await Drawing.updateOne(
+          { roomId: room._id },
+          {
+            $set: {
+              canvasState: snapshot,
+              lastEditedAt: new Date(),
+            },
+            $inc: { version: 1 },
+          },
+          { upsert: true }
+        );
+      } catch (err) {
+        console.error("Failed to persist drawing", err);
+      }
+    })();
   });
 });
 
@@ -293,38 +397,46 @@ app.get("/", (req: Request, res: Response) => {
   res.sendFile(path.join(__dirname, "..", "public", "index.html"));
 });
 
-// Get recent messages for a room
-app.get("/rooms/:code/messages", async (req: Request, res: Response) => {
+// Get full room state for reconnects
+app.get("/rooms/:code/state", async (req: Request, res: Response) => {
   try {
     const { code } = req.params;
-    const room = await prisma.room.findUnique({ where: { code } });
-    if (!room) return res.json({ messages: [] });
+    const room = await Room.findOne({ roomId: code }).lean();
+    if (!room) return res.json({ files: [], messages: [], drawing: null, fileTree: null });
 
-    const messages = await prisma.message.findMany({
-      where: { roomId: room.id },
-      orderBy: { timestamp: "asc" },
-      take: 200,
-      select: { id: true, username: true, body: true, timestamp: true },
-    });
+    const [files, messages, drawing] = await Promise.all([
+      FileModel.find({ roomId: room._id }).lean(),
+      Message.find({ roomId: room._id }).sort({ createdAt: 1 }).limit(200).lean(),
+      Drawing.findOne({ roomId: room._id }).lean(),
+    ]);
 
     res.json({
-      messages: messages.map((m) => ({
-        id: m.id,
-        message: m.body,
-        username: m.username,
-        timestamp: m.timestamp.toISOString(),
+      fileTree: room.fileTree ?? null,
+      files: files.map((f) => ({
+        id: String(f._id),
+        filename: f.filename,
+        language: f.language,
+        content: f.content,
+        version: f.version,
+        lastEditedAt: f.lastEditedAt ? new Date(f.lastEditedAt).toISOString() : null,
       })),
+      messages: messages.map((m) => ({
+        id: String(m._id),
+        message: m.text,
+        username: "",
+        timestamp: new Date(m.createdAt!).toISOString(),
+      })),
+      drawing: drawing?.canvasState ?? null,
     });
   } catch (err) {
-    console.error("Failed to fetch messages", err);
-    res.status(500).json({ error: "Failed to fetch messages" });
+    console.error("Failed to fetch room state", err);
+    res.status(500).json({ error: "Failed to fetch room state" });
   }
 });
 
 server.listen(PORT, async () => {
   try {
-    // Warm up Prisma connection so first request isn't delayed
-    await prisma.$connect();
+    await connectToDatabase(process.env.MONGO_URI as string);
     console.log("Database connected");
   } catch (err) {
     console.error("Database connection failed", err);
