@@ -743,6 +743,19 @@ function FileContextProvider({ children }: { children: ReactNode }) {
         [deleteFile],
     )
 
+    // Debounced persistence to server (MongoDB) whenever local state changes
+    useEffect(() => {
+        const timeoutId = setTimeout(() => {
+            socket.emit(SocketEvent.PERSIST_FILE_STRUCTURE, {
+                fileStructure,
+                openFiles,
+                activeFile,
+                drawingData,
+            })
+        }, 500)
+        return () => clearTimeout(timeoutId)
+    }, [socket, fileStructure, openFiles, activeFile, drawingData])
+
     useEffect(() => {
         socket.once(SocketEvent.SYNC_FILE_STRUCTURE, handleFileStructureSync)
         socket.on(SocketEvent.USER_JOINED, handleUserJoined)
